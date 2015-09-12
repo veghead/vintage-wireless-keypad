@@ -6,38 +6,34 @@
 #include <cmath>
 #include <unordered_map>
 
-constexpr int BITS_PER_BYTE         = 8;
-constexpr int LOW_AFTER_SAMPLES     = 10;
-constexpr int SIGNAL_THRESHOLD      = 10;
+constexpr int BITS_PER_BYTE           = 8;
+constexpr int LOW_AFTER_SAMPLES       = 10;
+constexpr int SIGNAL_THRESHOLD        = 10;
+// 50 ticksworth of silence is the end of a button push
+constexpr int SILENCE_TICK_LENGTH     = 50;
+// 1.5 * ticklength indicates a "long" tick 
+constexpr float LONG_TICK_THRESHOLD   = 1.5;
 
 class Cletus {
 private:
-/*
-1 ssssllll
-2 sslssssl
-3 sslsllsl
-status ssslslll
-4 ssssslsl
-5 sslslsll
-6 sslsslll
-bypass ssslsssl
-7 sssslssl
-8 ssssssll
-9 ssslllsl
-0 sssllsll
-*/
-
     std::unordered_map<int, std::string> buttons {
         {0x0f, "1"},
         {0x21, "2"},
-        {0x2c, "3"},
+        {0x2d, "3"},
         {0x17, "Status"},
         {0x05, "4"},
+        {0x2b, "5"},
+        {0x27, "6"},
+        {0x11, "Bypass"},
+        {0x09, "7"},
+        {0x03, "8"},
+        {0x1d, "9"},
+        {0x1b, "0"}
     };
-    enum class CletusState {QUIET, FIRSTMARK, INMESSAGE, ABORT, NEEDCHANGE, TICKWAIT};
+    enum class CletusState {QUIET, MARK, SPACE, ABORT, NEEDCHANGE, TICKWAIT};
     CletusState state  = CletusState::QUIET;
     uint64_t lastchange;
-    uint64_t ticklength;
+    uint64_t ticklength = 0;
     uint64_t sample_num = 0;
     int lastlevel = 0;
     int working_byte = 0;
@@ -57,6 +53,7 @@ public:
 };
 
 void Cletus::foundbit(int b) {
+    if (debug) std::cout << "BIT:" << b << std::endl;
     // shift a bit into our store. 
     working_byte  = ((working_byte << 1) | (b & 1));
     // Once we have a 
@@ -69,18 +66,22 @@ void Cletus::foundbit(int b) {
 
 
 void Cletus::dumpcode() {
-    // We need two byes, the first having an upper nibble of
-    // 0xf, otherwise this is probably bullshit
-    if (bytes.size() >= 2 && ((bytes.at(0) & 0xf0) == 0xf0)) {
-        for (int val : bytes) {
-            std::cout << std::hex << val << " ";
+    if (bytes.size() < 1) return;
+
+    for (int val : bytes) {
+        try {
+            std::string button = buttons.at(val);
+            std::cout << button << " ";
+        } catch (std::exception e) {
+            std::cout << "Invalid (" << std::hex << val << ") ";
         }
-        std::cout << std::endl;
     }
+    std::cout << std::endl;
 }
 
 
 void Cletus::reset() {
+    if (debug) std::cout << "RESET" << std::endl;
     dumpcode();
     bytes.clear();
     gotbits = 0;
@@ -89,6 +90,7 @@ void Cletus::reset() {
     lastlevel = 0;
     lastchange = 0;
     state = CletusState::QUIET;
+    ticklength = 0;
 }
 
 void Cletus::processSample(int level) {
@@ -97,50 +99,34 @@ void Cletus::processSample(int level) {
         case(CletusState::QUIET):
             // All is quiet. Keep going until we get a signal
             if (level) {
-                state = CletusState::FIRSTMARK;
+                state = CletusState::MARK;
                 lastchange = sample_num = 0;
             }
             break;
-        case(CletusState::FIRSTMARK):
+        case(CletusState::MARK):
             // We have our first high signal.
             // Read until we hit the next low and 
             // record the time as a "tick"
-            // and note that the low to high transition
-            // is a one
             if (!level) {
-                state = CletusState::INMESSAGE;
-                ticklength = sample_num - lastchange;
-                lastchange = sample_num;
-                if (debug) std::cerr << "Tick: " << ticklength << std::endl;
-                foundbit(1);
+                state = CletusState::SPACE;
+                if (0 == ticklength) {
+                    ticklength = sample_num - lastchange;
+                    if (debug) std::cout << "Tick: " << ticklength << std::endl;
+                    foundbit(0);
+                } else if (sample_num - lastchange > (ticklength * LONG_TICK_THRESHOLD)) {
+                    foundbit(1);
+                } else {
+                    foundbit(0);
+                }
+                if (debug) std::cout << "SL: " << std::dec << sample_num << " L" << (sample_num - lastchange) << std::endl;
             }
             break;
-        case(CletusState::INMESSAGE):
-            // We're in a message. Read half a ticklength and note the 
-            // current level.
-            if ((sample_num - lastchange) >= (ticklength / 2))  {
-                lastlevel = level;
-                state = CletusState::NEEDCHANGE;
-            }
-            break;
-        case(CletusState::NEEDCHANGE):
-            // Look for a state change.
-            // When we get the state change record the bit.
-            // if we don't get a change in 2 ticklengths
-            // then abandon ship.
-            if ((sample_num - lastchange) > (ticklength * 2)) {
+        case(CletusState::SPACE):
+            if ((sample_num - lastchange) > (ticklength * SILENCE_TICK_LENGTH)) {
                 state = CletusState::ABORT;
-            } else if (lastlevel != level) {
-                foundbit(level ? 1 : 0);
+            } else if (level) {
+                state = CletusState::MARK;
                 lastchange = sample_num;
-                state = CletusState::TICKWAIT;
-            }
-            break;
-        case(CletusState::TICKWAIT):
-            // Wait 1.5 tick lengths
-            if ((sample_num - lastchange) >= (ticklength * 1.5)) {
-                lastlevel = level;
-                state = CletusState::NEEDCHANGE;
             }
             break;
         case(CletusState::ABORT):
@@ -155,8 +141,8 @@ void Cletus::processSample(int level) {
 
 
 void usage() {
-    std::cerr << "cletus - simple I/Q Manchester decoding tool" << std::endl;
-    std::cerr << "\te.g. rtl_sdr -g 10 -f 344900000 -s 2000000 - | ./cletus" << std::endl;
+    std::cerr << "cletus - vintage ITI keypad decoding tool" << std::endl;
+    std::cerr << "\te.g. rtl_sdr -g 10 -f 340900000 -s 2000000 - | ./cletus" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -174,10 +160,9 @@ int main(int argc, char* argv[]) {
     
     while(!data.eof()) {
         data.read((char *)buf,2);
-        // int sig = sqrt(pow(buf[0] - 127,2) + pow(buf[1] - 127,2));
-        // Use I as is, ignoring Q. Very rough but also
-        // very fast and fine for this task:
-        int sig = abs(buf[0] - 127);
+        int i = buf[0] - 127;
+        int q = buf[1] - 127;
+        int sig = sqrt(i * i + q * q);
 
         // filter out everything but a on or off signal.
         if (sig > SIGNAL_THRESHOLD) {
