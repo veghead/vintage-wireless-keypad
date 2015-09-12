@@ -10,7 +10,7 @@ constexpr int BITS_PER_BYTE           = 8;
 constexpr int LOW_AFTER_SAMPLES       = 10;
 constexpr int SIGNAL_THRESHOLD        = 10;
 // 50 ticksworth of silence is the end of a button push
-constexpr int SILENCE_TICK_LENGTH     = 50;
+constexpr int SILENCE_TICK_LENGTH     = 40;
 // 1.5 * ticklength indicates a "long" tick 
 constexpr float LONG_TICK_THRESHOLD   = 1.5;
 
@@ -30,7 +30,7 @@ private:
         {0x1d, "9"},
         {0x1b, "0"}
     };
-    enum class CletusState {QUIET, MARK, SPACE, ABORT, NEEDCHANGE, TICKWAIT};
+    enum class CletusState {QUIET, MARK, SPACE, ABORT};
     CletusState state  = CletusState::QUIET;
     uint64_t lastchange;
     uint64_t ticklength = 0;
