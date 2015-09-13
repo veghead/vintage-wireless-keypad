@@ -9,7 +9,7 @@
 constexpr int BITS_PER_BYTE           = 8;
 constexpr int LOW_AFTER_SAMPLES       = 10;
 constexpr int SIGNAL_THRESHOLD        = 10;
-// 50 ticksworth of silence is the end of a button push
+// 40 ticksworth of silence is the end of a button push
 constexpr int SILENCE_TICK_LENGTH     = 40;
 // 1.5 * ticklength indicates a "long" tick 
 constexpr float LONG_TICK_THRESHOLD   = 1.5;
@@ -160,11 +160,13 @@ int main(int argc, char* argv[]) {
     
     while(!data.eof()) {
         data.read((char *)buf,2);
+        
+        // convert the I/Q data to a nice real plot
         int i = buf[0] - 127;
         int q = buf[1] - 127;
         int sig = sqrt(i * i + q * q);
 
-        // filter out everything but a on or off signal.
+        // filter out everything but an on or off signal.
         if (sig > SIGNAL_THRESHOLD) {
             level = 1;
             lowcount = 0;
